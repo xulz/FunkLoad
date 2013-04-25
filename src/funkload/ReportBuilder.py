@@ -69,7 +69,10 @@ from ReportRenderDiff import RenderDiff
 from ReportRenderTrend import RenderTrend
 from MergeResultFiles import MergeResultFiles
 from utils import trace, get_version
-
+#GC Chart
+from math import log10, ceil
+from commands import getstatusoutput
+from datetime import datetime
 
 # ------------------------------------------------------------
 # Xml parser
@@ -209,6 +212,201 @@ class FunkLoadXmlParser:
         if self.is_recording_cdata:
             self.current_cdata += data
 
+#GC chart
+
+def command(cmd, do_raise=True, silent=False):
+    """Return the status, output as a line list."""
+    extra = 'LC_ALL=C '
+    print('Run: ' + extra + cmd)
+    status, output = getstatusoutput(extra + cmd)
+    if status:
+        if not silent:
+            print('ERROR: [%s] return status: [%d], output: [%s]' %
+                  (extra + cmd, status, output))
+        if do_raise:
+            raise RuntimeError('Invalid return code: %s' % status)
+    if output:
+        output = output.split('\n')
+    return (status, output)
+
+
+def to_float(text):
+    if text == 'Infinity':
+        # float('Infinity') return inf :/
+        return 0
+    try:
+        x = float(text.replace(',', '.'))
+    except ValueError:
+        x = 0
+    return x
+
+
+def unzip(filename):
+    """Return true if zipped."""
+    if not os.path.exists(filename):
+        if os.path.exists(filename + '.gz'):
+            command('gunzip ' + filename + '.gz')
+            return True
+        else:
+            print "WARN: %s not found" % filename
+            raise ValueError("WARN: file %s not found." % filename)
+    return False
+
+
+def rezip(filename, zipped):
+    if zipped:
+        command('gzip ' + filename)
+
+
+
+class BaseChart(object):
+    """Base class for log charting."""
+    png_size = "640,480"
+    _scale = None
+
+    def __init__(self, log_file, out_directory, title, **options):
+        try:
+            zipped = unzip(log_file)
+        except ValueError:
+            return
+        self.log_file = log_file
+        self.title = title
+        self.options = options
+        self.out_directory = out_directory
+        self.prefix = os.path.splitext(os.path.basename(log_file))[0]
+        self.suffix = self.options.get('suffix', '')
+        filename = self.prefix + self.suffix
+        self.data_file = os.path.join(out_directory, filename + '.data')
+        self.gplot_file = os.path.join(out_directory, filename + '.gplot')
+        self.png_file = os.path.join(out_directory, filename + '.png')
+        self._scale = options.get('scale')
+        print "Processing %s" % self.data_file
+        try:
+            self.processLog()
+        except RuntimeError:
+            print "Aborting chart " + title
+            return
+        finally:
+            rezip(log_file, zipped)
+        print "Processing %s" % self.gplot_file
+        self.generateScript()
+        print "Processing %s" % self.png_file
+        self.generateChart()
+
+    def processLog(self):
+        """Generate the gnuplot data."""
+
+    def generateScript(self):
+        """Generate the gnuplot script."""
+
+    def generateChart(self):
+        """Generate the png chart."""
+        command("gnuplot " + self.gplot_file, do_raise=False)
+
+    def scale(self, s):
+        if self._scale is not None:
+            return self._scale
+        if not s:
+            return 1
+        # Get the nearest higher or equal power of 10
+        sc = ceil(log10(abs(s) / 101.))
+        # This is a hack, but I wanted to avoid 0.00999999. I prefer 0.01.
+        res = 1
+        for x in range(int(abs(sc))):
+            res = res * 10
+        if sc < 0:
+            return res
+        return 1.0 / res
+
+
+class GCMovingThroughput:
+    gcs = []
+
+    def __init__(self, duration=60):
+        """Duration for the moving throughput in second."""
+        self.duration = duration
+        self.gcs = []
+
+    def add(self, time, minor, major):
+        time = datetime.strptime(time, '%H:%M:%S')
+        minor = float(minor)
+        major = float(major)
+        to_drop = 0
+        for gc in self.gcs:
+            if (time - gc[0]).seconds > self.duration:
+                to_drop += 1
+            else:
+                break
+        if to_drop:
+            self.gcs = self.gcs[to_drop:]
+        self.gcs.append((time, minor, major))
+
+    def getMovingThroughput(self):
+        total = 0
+        for gc in self.gcs:
+            total += (gc[1] + gc[2])
+        return str(1 - (total / self.duration))
+
+
+class GCChart(BaseChart):
+    """Process a gc log file.
+    ...
+    3.099: [GC [PSYoungGen: 94415K->6528K(305856K)] 94415K->6528K(1004928K), 0.0205770 secs]
+    3.120: [Full GC [PSYoungGen: 6528K->0K(305856K)] [PSOldGen: 0K->6320K(699072K)] 6528K->6320K(1004928K) [PSPermGen: 13070K->13070K(26432K)], 0.0556970 secs]
+    ...
+    """
+    def processLog(self):
+        min_time = self.options['min_time']
+        if min_time:
+            min_time = datetime.strptime(min_time, '%H:%M:%S')
+            min_time = min_time.hour * 3600 + min_time.minute * 60 + min_time.second
+        else:
+            min_time = 0
+        log = open(self.log_file, 'r')
+        f = open(self.data_file, 'w+')
+        f.write('time Minor Major Throughput-1min\n')
+        gcmt = GCMovingThroughput()
+        for i, line in enumerate(log):
+            if "[GC " in line:
+                try:
+                    minor = line.split(', ')[1].split(' ')[0]
+                except IndexError:
+                    print "Skip line %d: %s" % (i + 1, line.strip())
+                    continue
+                major = 0
+            elif "[Full GC " in line:
+                minor = 0
+                try:
+                    major = line.split(', ')[1].split(' ')[0]
+                except IndexError:
+                    print "Skip line %d: %s" % (i + 1, line.strip())
+                    continue
+            else:
+                continue
+            time = line.split(':')[0]
+            time = datetime.fromtimestamp(float(time) + min_time).strftime('%H:%M:%S')
+            gcmt.add(time, minor, major)
+            f.write(("%s %s %s %s" % (
+                        time, minor, major,
+                        gcmt.getMovingThroughput())).replace(',', '.') + '\n')
+        f.close()
+        log.close()
+
+    def generateScript(self):
+        gplot = open(self.gplot_file, 'w+')
+        gplot.write('''set terminal png size %s
+                    set title "%s"
+                    set output "%s"
+                    set xdata time
+                    set timefmt "%%H:%%M:%%S"
+                    set format x "%%H:%%M"
+                    set datafile missing "NaN"
+                    set datafile missing "Infinity"
+                    set grid back
+                    # cols  ['minor', 'major']
+                    plot "%s" u 1:3 smooth frequency w impulses t "Major","" u 1:2 smooth frequency w impulses t "Minor", "" u 1:4 with lines t "0.01 * Throughput 1min"
+                ''' % (self.png_size, self.title, self.png_file, self.data_file))
+        gplot.close()
 
 
 # ------------------------------------------------------------

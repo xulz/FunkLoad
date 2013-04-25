@@ -494,6 +494,17 @@ class RenderRst:
         for chart in charts:
             self.append("**%s**\n\n.. image:: %s\n" % (
                     chart[0], os.path.basename(chart[1])))
+        #GC chart
+        self.append("**Garbage Collector**\n\n.. image:: gc.png\n\n" )
+        self.append("""* Minor: Objects are allocated in eden, and because of infant mortality most
+                    objects die there. When Eden fills up it causes a minor collection, in which
+                    some surviving objects are moved to an older generation
+
+                    * Major: (aka Full GC) When older generations need to be collected there is a major
+                    collection that is often much slower because it involves all living objects.
+
+                    * Throughput 1min: This is the percentage of total time not spent in garbage collection,
+                    considered over the last minute.\n\n""")
 
     def renderSlowestRequests(self, number):
         """Render the n slowest requests of the best cycle."""
