@@ -116,22 +116,39 @@ class MonitorPlugin(object):
                 ylabel += '[%s]' % plot.unit
             plotlines.append('set title "%s"' % plot.title)
             plotlines.append('set ylabel "%s"' % ylabel)
+            #change CPU chart to fix display at high cpu/load
+            if self.name == 'MonitorCPU':
+                plotlines.append('set size 1, 0.7')
+                plotlines.append('set origin 0, 0.3')
+                plotlines.append('set bmargin 0.8') 
             plot_line = 'plot "%s"' % data_path
 
             li = []
             for p in plot.plots.keys():
                 data.append(parsed[p])
                 labels.append(p)
-                li.append(' u 1:%d title "%s" with %s' % (len(data), plot.plots[p][1], plot.plots[p][0]))
+                if p != 'CPU':
+                    li.append(' u 1:%d title "%s" with %s' % (len(data), plot.plots[p][1], plot.plots[p][0]))
             plotlines.append(plot_line + ', ""'.join(li))
             plotsno += 1
+            if p == 'CPU': 
+                plotlines.append('unset title')
+                plotlines.append('set lmargin 9')
+                plotlines.append('set bmargin 3')
+                plotlines.append('set autoscale y')
+                plotlines.append('set style fill solid .25')
+                plotlines.append('set size 1.0, 0.3')
+                plotlines.append('set ylabel "CPU 1=100%"')
+                plotlines.append('set origin 0.0, 0.0')
+                plotlines.append('plot "" u 1:5 title "1=100%" with impulse lw 2')
 
         lines = []
         lines.append('set output "%s"' % image_path)
         lines.append('set terminal png size %d,%d' % (chart_size[0], chart_size[1] * plotsno))
         lines.append('set grid back')
         lines.append('set xdata time')
-        lines.append('set timefmt "%H:%M:%S"')
+        #change time format
+        lines.append('set timefmt "%H:%M:%S-%m/%d"')
         lines.append('set format x "%H:%M"')
         lines.append('set multiplot layout %d, 1' % plotsno)
         lines.extend(plotlines)

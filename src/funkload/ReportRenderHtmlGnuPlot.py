@@ -598,7 +598,8 @@ class RenderHtmlGnuPlot(RenderHtmlBase):
             test, cycle, cvus = stat.key.split(':')
             stat.cvus=cvus
             date = datetime.fromtimestamp(float(stat.time))
-            times.append(date.strftime("%H:%M:%S"))
+            #change time format to fix cross day-night display issue
+            times.append(date.strftime("%H:%M:%S-%m/%d"))
             #times.append(int(float(stat.time))) # - time_start))
             cvus_list.append(cvus)
 
